@@ -1,0 +1,28 @@
+# ── Core AI / Agents ──────────────────────────────────────────────────────────
+openai>=1.30.0
+openai-agents>=0.0.7          # Agents SDK (Runner, Agent, WebSearchTool, trace)
+anthropic>=0.25.0
+
+# ── Config ────────────────────────────────────────────────────────────────────
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+
+# ── Task queue ────────────────────────────────────────────────────────────────
+celery>=5.3.0
+redis>=5.0.0                  # Celery broker + result backend
+
+# ── Email ─────────────────────────────────────────────────────────────────────
+sendgrid>=6.11.0
+markdown>=3.5.0               # Markdown → HTML for email
+
+# ── UI (Phase 2) ──────────────────────────────────────────────────────────────
+gradio>=4.26.0
+
+# ── API layer (Phase 2) ───────────────────────────────────────────────────────
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+
+# ── Dev / testing ─────────────────────────────────────────────────────────────
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
