@@ -13,6 +13,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    REDIS_URL: str = Field(..., alias="REDIS_URL")
     openai_api_key: str = Field(..., alias="OPENAI_API_KEY")
     anthropic_api_key: str = Field(..., alias="ANTHROPIC_API_KEY")
     google_api_key: str = Field(..., alias="GOOGLE_API_KEY")
@@ -20,9 +21,6 @@ class Settings(BaseSettings):
 
     sendgrid_from_email: str = Field(default="noreply@deepresearch.ai", alias="SENDGRID_FROM_EMAIL")
     sendgrid_from_name: str = Field(default="Deep Research", alias="SENDGRID_FROM_NAME")
-
-    celery_broker_url: str = Field(default="redis://localhost:6379/0", alias="CELERY_BROKER_URL")
-    celery_result_backend: str = Field(default="redis://localhost:6379/0", alias="CELERY_RESULT_BACKEND")
 
     pipeline_quality_threshold: int = Field(default=8, alias="PIPELINE_QUALITY_THRESHOLD")
     pipeline_max_iterations: int = Field(default=4, alias="PIPELINE_MAX_ITERATIONS")
@@ -33,7 +31,6 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-
 
 # ── Evaluator prompt ───────────────────────────────────────────────────────────
 # IMPORTANT: The evaluator receives both the report AND the original search
