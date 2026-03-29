@@ -6,7 +6,8 @@ Celery application factory.
 Start a worker with:
   celery -A deep_research.worker.celery_app worker --loglevel=info
 """
-
+from dotenv import load_dotenv
+load_dotenv()
 from celery import Celery
 from deep_research.core.config import settings
 
