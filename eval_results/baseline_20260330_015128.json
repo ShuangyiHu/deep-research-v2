@@ -1,0 +1,56 @@
+[
+  {
+    "query": "AI coding jobs",
+    "tier": "vague",
+    "timestamp": "2026-03-30T01:55:57.206706",
+    "success": true,
+    "elapsed_seconds": 268.6,
+    "report_word_count": 1031,
+    "iterations_done": 4,
+    "scores_per_iter": [
+      7,
+      7,
+      7,
+      7
+    ],
+    "final_score": 7,
+    "initial_score": 7,
+    "score_delta": 0,
+    "avg_claude_gemini_gap": 1.0,
+    "max_claude_gemini_gap": 1,
+    "needs_more_search_count": 2,
+    "avg_weak_sections": 2.2,
+    "analyst_docs_out": 7,
+    "analyst_avg_relevance": 0.413,
+    "dedup_removed_total": 0,
+    "query_was_expanded": true,
+    "rewritten_query": "How are AI-assisted coding tools expected to influence hiring demand for software engineers globally over the next several years, which specific roles are most at risk of displacement, and what technical skills will likely remain complementary to AI-driven development?"
+  },
+  {
+    "query": "GLP-1 drugs market",
+    "tier": "vague",
+    "timestamp": "2026-03-30T02:01:02.832621",
+    "success": true,
+    "elapsed_seconds": 305.6,
+    "report_word_count": 1067,
+    "iterations_done": 4,
+    "scores_per_iter": [
+      6,
+      7,
+      7,
+      7
+    ],
+    "final_score": 7,
+    "initial_score": 6,
+    "score_delta": 1,
+    "avg_claude_gemini_gap": 0.25,
+    "max_claude_gemini_gap": 1,
+    "needs_more_search_count": 2,
+    "avg_weak_sections": 4.5,
+    "analyst_docs_out": 7,
+    "analyst_avg_relevance": 0.423,
+    "dedup_removed_total": 0,
+    "query_was_expanded": true,
+    "rewritten_query": "How is the ongoing growth of the GLP-1 weight-loss drugs market impacting healthcare costs, consumer behavior, and pharmaceutical trends globally in the near to medium term, and which sectors are likely to experience the most significant changes?"
+  }
+]

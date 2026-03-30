@@ -1,12 +1,29 @@
 """
 planner.py
 ──────────
-Step 1 of the pipeline:
-  - PlannerAgent  → generates N targeted search queries for a user query
-  - SearchAgent   → executes a single web search and returns a summary
-  - plan_searches()    → async, calls PlannerAgent
-  - perform_searches() → async, fans out searches and reports each completion
-  - targeted_search()  → async, used during iterative refinement
+Pipeline stages 2 & 3: query planning and parallel web search.
+
+Agents in this file:
+┌─────────────────┬──────────────────────────────────────────────────────────┐
+│ PlannerAgent    │ Role:   Given an (already-rewritten) query, produce N    │
+│                 │         typed search terms covering different dimensions. │
+│                 │ Input:  Rewritten research query string.                  │
+│                 │ Output: WebSearchPlan (list of WebSearchItem).            │
+│                 │ Model:  gpt-4o-mini (fast, cheap; planning is low-risk).  │
+├─────────────────┼──────────────────────────────────────────────────────────┤
+│ SearchAgent     │ Role:   Execute one web search and summarise results.     │
+│                 │ Input:  WebSearchItem (query + reason).                   │
+│                 │ Output: Plain text summary (~300 words).                  │
+│                 │ Model:  gpt-4o-mini + WebSearchTool.                      │
+│                 │ Note:   Run N instances in parallel via asyncio.gather.   │
+└─────────────────┴──────────────────────────────────────────────────────────┘
+
+Key change from v1:
+    perform_searches() and targeted_search() now return SearchDocumentCollection
+    instead of list[str]. Each SearchDocument carries the originating query,
+    enabling the Analyst Agent to score and deduplicate by provenance.
+    Callers (writer.py, pipeline.py) call .to_eval_string() when they need
+    a flat string for LLM context — no LLM prompt changes needed.
 """
 
 import asyncio
@@ -18,8 +35,10 @@ from agents import Agent, WebSearchTool, Runner
 from agents.model_settings import ModelSettings
 
 from deep_research.core.config import settings
+from deep_research.core.search_documents import SearchDocument, SearchDocumentCollection
 
 logger = logging.getLogger(__name__)
+
 
 # ── Data models ────────────────────────────────────────────────────────────────
 
@@ -32,16 +51,21 @@ class WebSearchPlan(BaseModel):
     searches: list[WebSearchItem] = Field(description="List of web searches to perform.")
 
 
-# ── Agents ─────────────────────────────────────────────────────────────────────
+# ── Agent factories ────────────────────────────────────────────────────────────
 
 def _build_planner_agent() -> Agent:
     n = settings.pipeline_how_many_searches
     return Agent(
         name="PlannerAgent",
         instructions=(
-            f"You are a research assistant. Given a query, produce {n} "
-            "targeted web search terms to best answer it. Focus on empirical data, "
-            "labor market trends, and skills forecasts."
+            f"You are a research planning assistant. Given a query, produce exactly {n} "
+            "targeted web search terms that together give comprehensive coverage.\n\n"
+            "Design your searches to cover different dimensions:\n"
+            "- At least one broad overview search\n"
+            "- At least one specific technical or mechanistic search\n"
+            "- At least one data/statistics/quantitative search\n"
+            "- At least one recent trends or forward-looking search\n\n"
+            "Focus on empirical data, authoritative sources, and diverse perspectives."
         ),
         model="gpt-4o-mini",
         output_type=WebSearchPlan,
@@ -54,7 +78,7 @@ def _build_search_agent() -> Agent:
         instructions=(
             "You are a research assistant. Search the web for the given term and produce "
             "a concise 2-3 paragraph summary (<300 words). Capture key facts, statistics, "
-            "and sources. Write succinctly — this feeds a report synthesizer."
+            "and sources. Write succinctly — this feeds a report synthesiser."
         ),
         tools=[WebSearchTool(search_context_size="low")],
         model="gpt-4o-mini",
@@ -85,13 +109,46 @@ def get_search_agent() -> Agent:
 async def plan_searches(
     query: str,
     on_progress: Callable[[str], None] | None = None,
+    n_searches: int | None = None,
 ) -> WebSearchPlan:
-    """Ask the PlannerAgent to generate a set of search queries."""
-    _emit(on_progress, "Planning searches…")
-    result = await Runner.run(get_planner_agent(), f"Query: {query}")
+    """
+    Ask PlannerAgent to generate a typed set of search queries.
+
+    Input:
+        query:      Rewritten research query string.
+        n_searches: Override the default search count from settings.
+                    Used by pipeline.py to give expanded queries a larger
+                    search budget — expanded queries cover more dimensions
+                    and need proportionally more evidence.
+    Output: WebSearchPlan with N WebSearchItems.
+    """
+    n = n_searches or settings.pipeline_how_many_searches
+    _emit(on_progress, f"Planning searches (n={n})…")
+
+    # Build a one-off instruction if n differs from the singleton's baked-in value
+    if n != settings.pipeline_how_many_searches:
+        from agents import Agent
+        agent = Agent(
+            name="PlannerAgent",
+            instructions=(
+                f"You are a research planning assistant. Given a query, produce exactly {n} "
+                "targeted web search terms that together give comprehensive coverage.\n\n"
+                "Design your searches to cover different dimensions:\n"
+                "- At least one broad overview search\n"
+                "- At least one specific technical or mechanistic search\n"
+                "- At least one data/statistics/quantitative search\n"
+                "- At least one recent trends or forward-looking search\n\n"
+                "Focus on empirical data, authoritative sources, and diverse perspectives."
+            ),
+            model="gpt-4o-mini",
+            output_type=WebSearchPlan,
+        )
+    else:
+        agent = get_planner_agent()
+
+    result = await Runner.run(agent, f"Query: {query}")
     plan: WebSearchPlan = result.final_output
 
-    # Show all planned keywords so the user knows what will be searched
     _emit(on_progress, f"→ {len(plan.searches)} searches planned:")
     for i, item in enumerate(plan.searches, 1):
         _emit(on_progress, f"   {i}. \"{item.query}\"")
@@ -104,27 +161,39 @@ async def _run_single_search_with_progress(
     index: int,
     total: int,
     on_progress: Callable[[str], None] | None,
-) -> str:
-    """Execute one search, emit start + done events, return summary."""
+) -> SearchDocument:
+    """
+    Execute one search, emit progress, return a SearchDocument.
+
+    Returns SearchDocument (not plain str) so the Analyst Agent can
+    deduplicate and score by content + query provenance.
+    """
     _emit(on_progress, f"   [{index}/{total}] Searching: \"{item.query}\"…")
     inp = f"Search term: {item.query}\nReason: {item.reason}"
     result = await Runner.run(get_search_agent(), inp)
+    summary = str(result.final_output)
     _emit(on_progress, f"   [{index}/{total}] ✓ Done: \"{item.query}\"")
-    return str(result.final_output)
+    return SearchDocument(content=summary, query=item.query)
 
 
-async def run_single_search(item: WebSearchItem) -> str:
-    """Execute one search (no progress callback). Used internally."""
+async def run_single_search(item: WebSearchItem) -> SearchDocument:
+    """Execute one search with no progress callback. Returns SearchDocument."""
     inp = f"Search term: {item.query}\nReason: {item.reason}"
     result = await Runner.run(get_search_agent(), inp)
-    return str(result.final_output)
+    return SearchDocument(content=str(result.final_output), query=item.query)
 
 
 async def perform_searches(
     search_plan: WebSearchPlan,
     on_progress: Callable[[str], None] | None = None,
-) -> list[str]:
-    """Fan out all searches in parallel; report each as it completes."""
+) -> SearchDocumentCollection:
+    """
+    Fan out all searches in parallel; collect into a SearchDocumentCollection.
+
+    Input:  WebSearchPlan
+    Output: SearchDocumentCollection (unscored; relevance defaults to 1.0)
+            → passed to Analyst Agent for dedup + scoring before writing.
+    """
     total = len(search_plan.searches)
     _emit(on_progress, f"Running {total} searches in parallel…")
 
@@ -134,18 +203,28 @@ async def perform_searches(
         )
         for i, item in enumerate(search_plan.searches, 1)
     ]
-    results = await asyncio.gather(*tasks)
-    _emit(on_progress, "→ All searches complete")
-    return list(results)
+    docs: list[SearchDocument] = await asyncio.gather(*tasks)
+    collection = SearchDocumentCollection(documents=list(docs))
+
+    stats = collection.to_summary_stats()
+    _emit(on_progress, f"→ All searches complete ({stats['doc_count']} docs, {stats['total_chars']:,} chars)")
+    return collection
 
 
 async def targeted_search(
     queries: list[str],
     on_progress: Callable[[str], None] | None = None,
-) -> str:
-    """Run a capped set of targeted searches during iterative refinement."""
+) -> SearchDocumentCollection:
+    """
+    Run a capped set of targeted searches during iterative refinement.
+
+    Input:  list of query strings from evaluator feedback.
+    Output: SearchDocumentCollection of new evidence docs.
+            Caller (pipeline.py) merges this into the existing collection.
+    """
     if not queries:
-        return ""
+        return SearchDocumentCollection()
+
     cap = settings.pipeline_search_query_cap
     capped = queries[:cap]
     total = len(capped)
@@ -158,10 +237,12 @@ async def targeted_search(
         )
         for i, item in enumerate(items, 1)
     ]
-    results = await asyncio.gather(*tasks)
-    evidence = "\n\n".join(r for r in results if r)
-    _emit(on_progress, f"→ Evidence retrieved ({len(evidence):,} chars)")
-    return evidence
+    docs: list[SearchDocument] = await asyncio.gather(*tasks)
+    collection = SearchDocumentCollection(documents=list(docs))
+
+    stats = collection.to_summary_stats()
+    _emit(on_progress, f"→ Evidence retrieved ({stats['total_chars']:,} chars)")
+    return collection
 
 
 # ── Helper ─────────────────────────────────────────────────────────────────────

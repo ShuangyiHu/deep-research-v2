@@ -1,7 +1,21 @@
 """
 config.py — environment variables and pipeline constants.
 """
-
+"""
+Pipeline agent map — where each agent lives:
+ 
+  QueryRewriterAgent  → core/query_rewriter.py   Stage 1
+  PlannerAgent        → core/planner.py           Stage 2
+  SearchAgent         → core/planner.py           Stage 3  (N parallel)
+  AnalystAgent        → core/analysis.py          Stage 3.5
+  WriterAgent         → core/writer.py            Stage 4
+  EvaluatorAgent      → core/evaluator.py         Stage 5  (Claude + Gemini parallel)
+  RewriteAgent        → core/rewriter.py          Stage 6
+  StructureAgent      → core/rewriter.py          Stage 6  (post-rewrite pass)
+ 
+Iterative loop (stages 5–6) repeats up to PIPELINE_MAX_ITERATIONS times
+or until consensus score ≥ PIPELINE_QUALITY_THRESHOLD.
+"""
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 

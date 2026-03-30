@@ -55,31 +55,33 @@ def run_research_task(
     max_iter: Optional[int] = None,
 ) -> dict:
     """
-    Celery task: run the full Deep Research pipeline for a user query.
-
-    Progress updates are pushed to the result backend as:
-        {
-            "state": "PROGRESS",
-            "meta": {
-                "log": ["Planning searches…", "→ 5 searches planned", …]
-            }
-        }
-
-    On completion:
-        {
-            "state": "SUCCESS",
-            "result": {
-                "report": "<markdown string>",
-                "email_sent": True | False | None
-            }
-        }
-
-    Args:
-        query:     The user's research question.
-        email:     Optional email address to send the finished report to.
-        threshold: Quality threshold (overrides settings default).
-        max_iter:  Max refinement iterations (overrides settings default).
-    """
+Celery task: run the full 8-agent Deep Research pipeline for a user query.
+ 
+Agent pipeline executed inside this task:
+    1. QueryRewriterAgent  — expand vague queries before search
+    2. PlannerAgent        — generate N typed search queries
+    3. SearchAgent ×N      — parallel web search, returns SearchDocumentCollection
+    4. AnalystAgent        — deduplicate, score, filter evidence (no LLM)
+    5. WriterAgent         — draft report from structured evidence
+    [iterative loop up to max_iter:]
+    6. EvaluatorAgent      — Claude + Gemini consensus score + weak section detection
+    7. SearchAgent ×N      — targeted search if needs_more_search (optional)
+    8. AnalystAgent        — re-score new evidence before merging (optional)
+    9. RewriteAgent        — rewrite weak sections with new evidence
+   10. StructureAgent      — fix transitions, remove duplicates
+ 
+Progress updates are pushed to the Celery result backend as:
+    {"state": "PROGRESS", "meta": {"log": ["Planning searches…", ...]}}
+ 
+On completion:
+    {"report": "<markdown>", "email_sent": True|False|None, "log": [...]}
+ 
+Args:
+    query:     The user's research question (raw — QueryRewriterAgent handles expansion).
+    email:     Optional address for SendGrid delivery on completion.
+    threshold: Quality score (1–10) at which iteration stops. Defaults to settings.
+    max_iter:  Max refinement iterations. Defaults to settings.
+"""
     progress_log: list[str] = []
 
     def on_progress(msg: str) -> None:

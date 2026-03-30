@@ -1,10 +1,24 @@
 """
 clients.py
 ──────────
-Singleton API clients.
-
-Import `claude_client`, `gemini_client` here instead of constructing them
-in multiple modules. This also makes test-time monkey-patching easy.
+Singleton API clients shared across all agents.
+ 
+Why singletons:
+    Each agent module imports the client it needs directly from here.
+    Constructing clients once at import time avoids per-call auth overhead
+    and makes test-time monkey-patching straightforward.
+ 
+Client → Agent mapping:
+    claude_client   → EvaluatorAgent (consensus_evaluation in evaluator.py)
+    gemini_client   → EvaluatorAgent (consensus_evaluation in evaluator.py)
+    openai_client   → PlannerAgent, SearchAgent, WriterAgent, RewriteAgent,
+                      StructureAgent, QueryRewriterAgent
+                      (via openai-agents SDK Runner — reads OPENAI_API_KEY from env)
+ 
+Note on openai_client:
+    The openai-agents SDK (Runner / Agent) reads OPENAI_API_KEY from the
+    environment automatically. The explicit openai_client here is available
+    for any direct OpenAI calls outside the Agents SDK if needed.
 """
 
 import anthropic

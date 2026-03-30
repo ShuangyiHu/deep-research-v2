@@ -1,9 +1,26 @@
 """
 writer.py
 ─────────
-Step 2: plan → search → draft.
-Now returns (report, search_results) so the evaluator can fact-check
-against the actual search evidence rather than training-data knowledge.
+Pipeline stage 4: plan → search → [analyse] → draft.
+
+Agent in this file:
+┌──────────────┬───────────────────────────────────────────────────────────────┐
+│ WriterAgent  │ Role:   Given a query and scored, deduplicated search evidence,│
+│              │         produce a structured research report in markdown.      │
+│              │ Input:  Rewritten query + context string from                  │
+│              │         SearchDocumentCollection (post-Analyst).               │
+│              │ Output: ReportData (summary + full markdown + follow-ups).     │
+│              │ Model:  gpt-4o-mini.                                           │
+└──────────────┴───────────────────────────────────────────────────────────────┘
+
+Key change from v1:
+    draft_report() now accepts an optional pre-built SearchDocumentCollection
+    (produced by the Analyst Agent upstream). If provided, it skips the search
+    phase and uses the already-structured evidence directly.
+
+    Return type is still (markdown_report: str, collection: SearchDocumentCollection)
+    so pipeline.py can pass the collection forward to the evaluator and the
+    iterative refinement loop — the evaluator calls .to_eval_string() itself.
 """
 
 import logging
@@ -13,15 +30,20 @@ from pydantic import BaseModel, Field
 from agents import Agent, Runner
 
 from deep_research.core.planner import plan_searches, perform_searches
+from deep_research.core.search_documents import SearchDocumentCollection
 
 logger = logging.getLogger(__name__)
 
+
+# ── Output schema ──────────────────────────────────────────────────────────────
 
 class ReportData(BaseModel):
     short_summary: str = Field(description="A 2-3 sentence summary of the findings.")
     markdown_report: str = Field(description="The full report in markdown, 1000+ words.")
     follow_up_questions: list[str] = Field(description="Topics to research further.")
 
+
+# ── Agent factory ──────────────────────────────────────────────────────────────
 
 def _build_writer_agent() -> Agent:
     return Agent(
@@ -36,7 +58,9 @@ def _build_writer_agent() -> Agent:
             "- Back every major claim with data, statistics, or named sources from the search results\n"
             "- Include an Introduction and a Conclusion\n"
             "- Body sections should reflect the actual sub-questions and themes in the query\n"
-            "- Write for an informed reader; avoid padding"
+            "- Write for an informed reader; avoid padding\n\n"
+            "Each search result is prefixed with [Source query: ...] — use this to "
+            "attribute claims to specific search directions when relevant."
         ),
         model="gpt-4o-mini",
         output_type=ReportData,
@@ -53,28 +77,47 @@ def get_writer_agent() -> Agent:
     return _writer_agent
 
 
+# ── Public function ────────────────────────────────────────────────────────────
+
 async def draft_report(
     query: str,
     on_progress: Callable[[str], None] | None = None,
-) -> tuple[str, str]:
+    collection: SearchDocumentCollection | None = None,
+    n_searches: int | None = None,
+) -> tuple[str, SearchDocumentCollection]:
     """
-    Returns (markdown_report, combined_search_results).
-    The search results are passed to the evaluator for evidence-grounded fact-checking.
+    Draft a research report from a query.
+
+    Input:
+        query:      The (rewritten) research question.
+        collection: Pre-built SearchDocumentCollection from Analyst Agent.
+                    If None, this function runs search internally.
+        n_searches: Override search count. Pipeline passes a higher value
+                    when the query was expanded by QueryRewriterAgent, to
+                    match the increased dimensional scope of the rewritten query.
+
+    Output:
+        (markdown_report, collection)
     """
     _emit(on_progress, "─── PHASE 1: Drafting report ───")
-    search_plan = await plan_searches(query, on_progress=on_progress)
-    search_results = await perform_searches(search_plan, on_progress=on_progress)
 
-    combined_search = "\n\n---\n\n".join(search_results)
-    inp = f"Original query: {query}\n\nSearch results:\n{combined_search}"
+    if collection is None:
+        _emit(on_progress, "[writer] No collection supplied — running search internally")
+        search_plan = await plan_searches(query, on_progress=on_progress, n_searches=n_searches)
+        collection = await perform_searches(search_plan, on_progress=on_progress)
+
+    context_string = collection.to_eval_string()
+    inp = f"Original query: {query}\n\nSearch results:\n{context_string}"
 
     _emit(on_progress, "Writing draft report…")
     result = await Runner.run(get_writer_agent(), inp)
     report_data: ReportData = result.final_output
 
     _emit(on_progress, "→ Draft complete")
-    return report_data.markdown_report, combined_search
+    return report_data.markdown_report, collection
 
+
+# ── Helper ─────────────────────────────────────────────────────────────────────
 
 def _emit(cb, msg):
     logger.info(msg)
