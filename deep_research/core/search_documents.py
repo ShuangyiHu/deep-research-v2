@@ -60,6 +60,25 @@ class SearchDocument:
         """
         return f"[Source query: {self.query}]\n{self.content}"
 
+    def to_dict(self) -> dict:
+        """Serialize to plain dict for A2A DataPart transport."""
+        return {
+            "content": self.content,
+            "query": self.query,
+            "relevance": self.relevance,
+            "doc_id": self.doc_id,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SearchDocument":
+        """Deserialize from A2A DataPart dict."""
+        return cls(
+            content=d["content"],
+            query=d["query"],
+            relevance=d.get("relevance", 1.0),
+            doc_id=d.get("doc_id", ""),
+        )
+
 
 @dataclass
 class SearchDocumentCollection:
@@ -95,6 +114,15 @@ class SearchDocumentCollection:
         Includes query provenance so the evaluator can ground accuracy claims.
         """
         return "\n\n---\n\n".join(d.to_context_string() for d in self.documents)
+
+    def to_dict(self) -> dict:
+        """Serialize to plain dict for A2A DataPart transport."""
+        return {"documents": [d.to_dict() for d in self.documents]}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SearchDocumentCollection":
+        """Deserialize from A2A DataPart dict."""
+        return cls(documents=[SearchDocument.from_dict(doc) for doc in d.get("documents", [])])
 
     def to_summary_stats(self) -> dict:
         """

@@ -78,14 +78,13 @@ def create_app() -> FastAPI:
     # ── Routers ───────────────────────────────────────────────────────────────
     app.include_router(router, prefix="/api/v1", tags=["Research"])
 
-    # ── Gradio UI (mounted at /) ──────────────────────────────────────────────
-    # Importing here avoids circular imports and keeps startup fast when
-    # running the API without the UI (e.g. in a pure-worker deploy).
-    from deep_research.ui.app import create_gradio_app
-    gradio_app = create_gradio_app()
-    app = gr.mount_gradio_app(app, gradio_app, path="/")
+    # ── A2A agent servers (mounted at /a2a/<name>/) ───────────────────────────
+    from deep_research.a2a.server import register_a2a_apps
+    register_a2a_apps(app)
 
     # ── Health check (no auth, used by load balancers / k8s probes) ──────────
+    # Defined BEFORE Gradio mount: gr.mount_gradio_app(path="/") in Gradio 6.x
+    # may intercept routes registered after it.
     @app.get("/health", tags=["Meta"], include_in_schema=False)
     async def health() -> dict:
         return {"status": "ok"}
@@ -103,6 +102,12 @@ def create_app() -> FastAPI:
     @app.on_event("shutdown")
     async def on_shutdown() -> None:
         logger.info("Deep Research API shutting down.")
+
+    # ── Gradio UI (mounted at /) ──────────────────────────────────────────────
+    # Mounted LAST so it does not shadow /health or /api routes.
+    from deep_research.ui.app import create_gradio_app
+    gradio_app = create_gradio_app()
+    app = gr.mount_gradio_app(app, gradio_app, path="/")
 
     return app
 

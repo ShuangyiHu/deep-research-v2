@@ -102,23 +102,29 @@ class TestConsensusEvaluation:
 
     # ── FIX 3: weak_sections 只保留 canonical 名字 ───────────────────────────
 
-    def test_non_canonical_sections_are_filtered_out(self):
-        """模型返回了不在 CANONICAL_SECTIONS 里的名字，应该被过滤掉。"""
+    def test_non_canonical_sections_are_preserved(self):
+        """模型返回的所有 weak_sections 都被保留（不再过滤）。
+
+        这允许 evaluator 灵活地返回报告中任何实际存在的 section names，
+        而不受 CANONICAL_SECTIONS 的限制。
+        """
         claude_fb = self._make_feedback(
             score=5,
-            weak=["Introduction", "Some Random Section Name"],  # 第二个不合法
+            weak=["Introduction", "Key Developments in MCP and A2A Systems"],
         )
         gemini_fb = self._make_feedback(
             score=5,
-            weak=["Complementary Skills", "Another Fake Section"],  # 第二个不合法
+            weak=["Challenges Limiting Global Adoption", "Industry Sentiment"],
         )
 
         with patch("deep_research.core.evaluator.claude_evaluate", return_value=claude_fb), \
              patch("deep_research.core.evaluator.gemini_evaluate", new_callable=AsyncMock, return_value=gemini_fb):
             result = self._run(consensus_evaluation("fake report"))
 
-        for section in result["weak_sections"]:
-            assert section in CANONICAL_SECTIONS
+        # All sections from both models should be in the result (deduplicated)
+        expected = {"Introduction", "Key Developments in MCP and A2A Systems",
+                    "Challenges Limiting Global Adoption", "Industry Sentiment"}
+        assert set(result["weak_sections"]) == expected
 
     def test_all_canonical_sections_are_kept(self):
         """合法的 section 名字不应该被过滤。"""

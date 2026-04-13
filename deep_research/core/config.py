@@ -43,8 +43,48 @@ class Settings(BaseSettings):
     pipeline_search_query_cap: int = Field(default=5, alias="PIPELINE_SEARCH_QUERY_CAP")
     pipeline_score_gap_threshold: int = Field(default=4, alias="PIPELINE_SCORE_GAP_THRESHOLD")
 
+    # ── A2A agent endpoints (override per-agent for split-container deploys) ──
+    a2a_base_url: str = Field(default="http://localhost:8000/a2a", alias="A2A_BASE_URL")
+    a2a_search_url: str | None = Field(default=None, alias="A2A_SEARCH_URL")
+    a2a_analyst_url: str | None = Field(default=None, alias="A2A_ANALYST_URL")
+    a2a_writer_url: str | None = Field(default=None, alias="A2A_WRITER_URL")
+    a2a_evaluator_url: str | None = Field(default=None, alias="A2A_EVALUATOR_URL")
+
+    # ── MCP tool abstraction ───────────────────────────────────────────────────
+    mcp_search_mode: str = Field(default="in-process", alias="MCP_SEARCH_MODE")
+
 
 settings = Settings()
+
+# ── Canonical section names ────────────────────────────────────────────────────
+# Used by consensus_evaluation() to filter hallucinated section names returned
+# by the evaluator models. Only sections whose headings appear in this set are
+# kept in weak_sections — prevents the pipeline from rewriting a section that
+# does not actually exist in the report.
+CANONICAL_SECTIONS: frozenset[str] = frozenset({
+    "Introduction",
+    "Background",
+    "Overview",
+    "Summary",
+    "Executive Summary",
+    "Methodology",
+    "Task Automation vs Job Elimination",
+    "Short-run vs Long-run Demand",
+    "Productivity vs Hiring Demand",
+    "Capital-Labor Substitution",
+    "Scale Effects",
+    "Junior Engineer Pipeline Risk",
+    "Complementary Skills",
+    "Conclusion",
+    "References",
+    "Key Findings",
+    "Analysis",
+    "Discussion",
+    "Recommendations",
+    "Implications",
+    "Market Dynamics",
+    "Future Outlook",
+})
 
 # ── Evaluator prompt ───────────────────────────────────────────────────────────
 # IMPORTANT: The evaluator receives both the report AND the original search
@@ -66,7 +106,11 @@ Return ONLY valid JSON with NO markdown fences.
   "needs_more_search": <true|false>,
   "search_queries": [<str>, ...],
   "rewrite_instructions": {
-    "<exact section heading>": "<specific improvement instructions>"
+    "<exact section heading>": {
+      "missing_angles":       [<str>, ...],   // sub-topics the section does not cover
+      "questions_to_answer":  [<str>, ...],   // specific questions the rewritten section should answer
+      "evidence_to_integrate":[<str>, ...]    // SOURCE urls or search queries from the evidence that the rewriter must use
+    }
   }
 }
 
@@ -87,6 +131,28 @@ Scoring rubric (each criterion ~1.4 points, total 10):
                     A claim is UNVERIFIABLE (penalise moderately, not harshly) if the
                     search results are silent on it — do not penalise for topics that
                     simply postdate your training data.
+
+DEPTH-GAP → SEARCH RULE (important):
+  If a weak section is flagged for shallow analysis, missing mechanisms, missing
+  comparisons, or under-developed implications, the rewriter CANNOT add that
+  depth from training knowledge (it is forbidden to do so). In that case you
+  MUST:
+    - set `needs_more_search` = true, AND
+    - put 1–3 concrete, targeted follow-up queries in `search_queries` that
+      would surface the missing evidence (name the specific mechanism, metric,
+      stakeholder, or comparison).
+  Do NOT set needs_more_search=true for merely stylistic issues.
+
+rewrite_instructions guidance:
+  - Each entry MUST be a structured object with all three keys above.
+  - `missing_angles`: name the specific sub-topics absent from the section.
+  - `questions_to_answer`: phrase as answerable questions the rewrite must address.
+  - `evidence_to_integrate`: list SOURCE URLs or search queries (verbatim from
+     the provided search results) that the rewrite must cite. Leave empty only
+     if `needs_more_search` is true and you expect the supplemental search to
+     fill this in.
+  - If a section only needs prose polish, list one item in `missing_angles`
+     describing the polish, and leave the other two arrays empty.
 
 Use EXACT section headings from the report in weak_sections and rewrite_instructions.
 """

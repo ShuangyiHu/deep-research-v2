@@ -12,6 +12,7 @@ from typing import Callable
 
 from deep_research.core.clients import claude_client, gemini_client
 from deep_research.core.config import (
+    CANONICAL_SECTIONS,
     EVAL_PROMPT_TEMPLATE,
     EVAL_SEARCH_HEADER,
     EVAL_REPORT_HEADER,
@@ -21,19 +22,31 @@ from deep_research.core.utils import with_retry, safe_extract_json
 
 logger = logging.getLogger(__name__)
 
-# Max chars of search results to include in eval prompt (keeps tokens manageable)
-_MAX_SEARCH_CHARS = 8_000
+# Max chars of search results included in eval prompt. Must be large enough to
+# fit the FULL collection the writer was grounded in — otherwise the evaluator
+# penalises claims it cannot see the evidence for, producing false
+# "unverifiable data" flags. Claude Sonnet 4.6 and Gemini 2.0 Flash both handle
+# 200k+ context, so 60k chars is safe headroom.
+_MAX_SEARCH_CHARS = 60_000
 
 
 def _build_eval_prompt(report: str, search_results: str) -> str:
-    """Combine base prompt + truncated search results + report."""
-    truncated = search_results[:_MAX_SEARCH_CHARS]
+    """Combine base prompt + search results + report.
+
+    If the evidence exceeds the cap, log a warning — under-truncation here is
+    the #1 cause of false "unverifiable" flags in the quality assessment.
+    """
     if len(search_results) > _MAX_SEARCH_CHARS:
-        truncated += "\n[...truncated for length...]"
+        logger.warning(
+            "Evaluator search_results truncated: %d > %d chars — "
+            "accuracy scoring may miss evidence for later claims.",
+            len(search_results), _MAX_SEARCH_CHARS,
+        )
+        search_results = search_results[:_MAX_SEARCH_CHARS] + "\n[...truncated for length...]"
     return (
         EVAL_PROMPT_TEMPLATE
         + EVAL_SEARCH_HEADER
-        + truncated
+        + search_results
         + EVAL_REPORT_HEADER
         + report
     )
@@ -109,6 +122,8 @@ async def consensus_evaluation(
     merged_queries: list[str] = list(
         set(claude_fb.get("search_queries", []) + gemini_fb.get("search_queries", []))
     )[:cap]
+    # Merge weak sections from both models; trust the evaluator to return
+    # actual section headings from the report (not invented ones)
     merged_weak: list[str] = list(
         set(claude_fb.get("weak_sections", []) + gemini_fb.get("weak_sections", []))
     )
